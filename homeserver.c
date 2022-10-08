@@ -448,13 +448,17 @@ int main(int argc, char **argv) {
 
                 char fileBuffer[BUFFER_SIZE];
 
-                // bzero(buffer, BUFFER_SIZE);
+                int total = 0;
+                // bzero(fileBuffer, BUFFER_SIZE);
             // Read the filestream in BUFFER_SIZE chunks and store in buffer
 
-                if(fileSize >= BUFFER_SIZE)
-                  readStream = read(fileToRead, fileBuffer, BUFFER_SIZE);
-                else
-                  readStream = read(fileToRead, fileBuffer, fileSize);
+                // if(fileSize >= BUFFER_SIZE)
+                  // readStream = read(fileToRead, fileBuffer, BUFFER_SIZE);
+
+
+                // else
+
+                  // readStream = read(fileToRead, fileBuffer, fileSize + 1);
 
 
             // If writing to the socket fails at any point,
@@ -464,15 +468,18 @@ int main(int argc, char **argv) {
                 printf("We're getting here\n");
 
             // While we still have chunks to read...
-                while(readStream > 0){
+                do{
+                  readStream = read(fileToRead, fileBuffer, BUFFER_SIZE);
+                  total += readStream;
+                  printf("Total is currently %d, total size is %d\n", total, fileSize);
                 // while(readStream > 0 && writeChunkSuccess == 0){
 
               // Keeps track of total bytes written
                   // total += readStream;
 
-                  fileBuffer[strlen(fileBuffer) + 1] = '\0';
+                  // fileBuffer[strlen(fileBuffer) + 1] = '\0';
                   // fileBuffer[strlen(fileBuffer) - 1] = '\0';
-                  printf("Writing \"%s\" to socket\n", fileBuffer);
+                  // printf("Writing \"%s\" to socket\n", fileBuffer);
               // Write the contents of buffer from the readstream to the client socket
                   writeStream = SSL_write(ssl, fileBuffer, readStream);
 
@@ -497,15 +504,17 @@ int main(int argc, char **argv) {
 
                   // bzero(fileBuffer, BUFFER_SIZE);
               // Read next BUFFER_SIZE chunk and store in buffer.
-                  readStream = read(fileToRead, fileBuffer, BUFFER_SIZE);
-                }
+                  
+                }while(readStream > 0);
+                close(readStream);
+                close(writeStream);
+                close(fileToRead);
+
                 printf("Finished writing\n");
                 SSL_write(ssl, "\n", strlen("\n"));
 
                 SSL_write(ssl, "FOE\n", strlen("FOE\n"));
-                close(readStream);
-                close(writeStream);
-                close(fileToRead);
+
 
 
           } else {
