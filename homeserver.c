@@ -424,6 +424,7 @@ int main(int argc, char **argv) {
             int fileToRead, readStream, writeStream;
 
             fileToRead = open(fullFilePath, O_RDONLY, 644);
+			
 
 
 
@@ -435,7 +436,8 @@ int main(int argc, char **argv) {
                 sprintf(serverReply, "%d %d", RPC_SUCCESS, START_WRITING);
                 printf("CommandArg is %s\n", commandArg);
                 sprintf(commandArg, "%s\n", commandArg);
-                SSL_write(ssl, commandArg, strlen(commandArg));
+				//sending file name??
+                //SSL_write(ssl, commandArg, strlen(commandArg) + 1);
                 
 
                 // SSL_write(ssl, serverReply, strlen(serverReply));
@@ -444,7 +446,15 @@ int main(int argc, char **argv) {
                 off_t fileSize;
                 stat(fullFilePath, &fileStats);
 
+
+				//DP: sending file size first, recieved with buffered reader
                 fileSize = fileStats.st_size;
+				printf("File Size = %d\n", fileSize);
+				char size[BUFFER_SIZE];
+				sprintf(size, "%d\n", fileSize);
+				
+				SSL_write(ssl,size, BUFFER_SIZE);
+				//DP: End of what I did here
 
                 char fileBuffer[BUFFER_SIZE];
 
@@ -471,7 +481,7 @@ int main(int argc, char **argv) {
                 do{
                   readStream = read(fileToRead, fileBuffer, BUFFER_SIZE);
                   total += readStream;
-                  printf("Total is currently %d, total size is %d\n", total, fileSize);
+                  //printf("Total is currently %d, total size is %d\n", total, fileSize);
                 // while(readStream > 0 && writeChunkSuccess == 0){
 
               // Keeps track of total bytes written
