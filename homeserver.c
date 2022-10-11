@@ -411,7 +411,14 @@ int main(int argc, char **argv) {
             }
           } else if(strncmp(buffer, RPC_REQUEST_FILE, strlen(RPC_REQUEST_FILE)) == 0){
             printf("Buffer is %s\n", buffer);
-            sscanf(buffer, "%s %s", command, commandArg);
+
+            // This is the pattern %[^\"]
+            // % indicates the start of something to look for
+            // [] tells us to keep searching until X character
+            // ^ is the NOT operator
+            // We escape the double-quote character
+            // So we're saying, keep reading until you reach a double-quote!
+            sscanf(buffer, "%s \"%[^\"]", command, commandArg);
 
             printf("Command is %s and commandArg is %s\n", command, commandArg);
 
