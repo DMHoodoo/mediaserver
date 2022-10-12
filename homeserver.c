@@ -51,7 +51,7 @@ SYNOPSIS: This program is a small server application that receives incoming TCP
 
 #define RPC_REQUEST_LISTING "requestlisting"
 #define RPC_REQUEST_FILE "requestfile "
-
+#define RPC_REQUEST_MD5 "requestmd5 "
 
 #define SERVER_FAIL 1
 
@@ -254,16 +254,15 @@ int main(int argc, char **argv) {
   pid = getpid();
 
   if(pid != homePID){
-  // printf("Current pid is %d\n", pid);
-  // Initialize and create SSL data structures and algorithms
+    // Initialize and create SSL data structures and algorithms
     init_openssl();
     ssl_ctx = create_new_context();
     configure_context(ssl_ctx);
-
-    // printf("%d: Comparing pid %d to pid %d\n", pid, pid, mainPID);
+  
     if(mainPID == 0){
       printf("%d: Assigning port %d\n", getpid(), DEFAULT_PORT_MAIN);
-    // Port can be specified on the command line. If it's not, use default port
+
+      // Port can be specified on the command line. If it's not, use default port
       switch(argc) {
         case 1:
         port = DEFAULT_PORT_MAIN;
@@ -336,38 +335,28 @@ int main(int argc, char **argv) {
           printf("%d: Server: Established SSL/TLS connection with client (%s)\n",
             getpid(), client_addr);
 
-
-      // ***********************************************************************
-      // YOUR CODE HERE
-      //
-      // You will need to use the SSL_read and SSL_write functions, which work
-      // in the same manner as traditional read and write system calls, but use
-      // the SSL socket descriptor 'ssl' declared above instead of a file
-      // descriptor.
-      // ***********************************************************************
-
           bzero(buffer, BUFFER_SIZE);
 
-      // Read initial client request
+          // Read initial client request
           SSL_read(ssl, buffer, BUFFER_SIZE);
 
-      // Command being issued
+          // Command being issued
           char command[BUFFER_SIZE];
 
-      // Argument of command
+          // Argument of command
           char commandArg[BUFFER_SIZE];      
 
-      // Dummy value for evaluating amount of arguments
+          // Dummy value for evaluating amount of arguments
           char dummy[BUFFER_SIZE];
 
-      // Buffer for sending replies to the client
+          // Buffer for sending replies to the client
           char serverReply[BUFFER_SIZE];
 
-          if(strncmp(buffer, RPC_REQUEST_LISTING, strlen(RPC_REQUEST_LISTING)) == 0){
-            // sscanf("%d", serverReply, RPC_SUCCESS);
-            // SSL_write(ssl, serverReply, strlen(serverReply));
-            printf("Correct request.. attempting to list out thingies\n");
 
+          // If the user requested the list of the directory
+          if(strncmp(buffer, RPC_REQUEST_LISTING, strlen(RPC_REQUEST_LISTING)) == 0){
+
+            printf("%d: Sending list to client..\n", getpid());
             DIR *directory;
 
             struct dirent *dir;
@@ -376,41 +365,28 @@ int main(int argc, char **argv) {
 
             if(directory) {
               while((dir = readdir(directory)) != NULL) {
-                printf("%s\r\n", dir->d_name);
                 sprintf(serverReply, "%s\r\n", dir->d_name);
-                printf("Sending server reply %s\n", serverReply);
                 int tempWriteStream;
 
                 tempWriteStream = SSL_write(ssl, serverReply, strlen(serverReply) + 1);   
 
-              // If there was a failure to write to the socket..
+                  // If there was a failure to write to the socket..
                   if(tempWriteStream < 0){
-
-                // Notify client and end read/write loop by setting
-                // writeChunkSuccess to 1
                     fprintf(stderr, "Server: Unable to process: %s\n", strerror(errno));
 
-                // Marshal error parameters and send to client
+                    // Marshal error parameters and send to client: TODO THIS
                     // sprintf(serverReply, "%d %d", SERVER_FAIL, errno);
                     // SSL_write(ssl, serverReply, strlen(serverReply));  
 
-                    // close(readStream);
                     close(tempWriteStream);
-                    // close(fileToRead);
-
-                    // writeChunkSuccess = 1;d 
                   }                
               }         
+
               sprintf(serverReply, "%d\r\n", RPC_SUCCESS);     
               SSL_write(ssl, serverReply, strlen(serverReply) + 1);
               closedir(directory);
-
-
-              // SSL_write(ssl, "test\n", 5);
-
             }
           } else if(strncmp(buffer, RPC_REQUEST_FILE, strlen(RPC_REQUEST_FILE)) == 0){
-            printf("Buffer is %s\n", buffer);
 
             // This is the pattern %[^\"]
             // % indicates the start of something to look for
@@ -420,94 +396,64 @@ int main(int argc, char **argv) {
             // So we're saying, keep reading until you reach a double-quote!
             sscanf(buffer, "%s \"%[^\"]", command, commandArg);
 
-            printf("Command is %s and commandArg is %s\n", command, commandArg);
+            printf("%d: Attempting to send file \"%s\" to client.\n", getpid(), commandArg);
 
-            // SSL_write(ssl, "goodboisonly", strlen("goodboisonly"));
             char fullFilePath[BUFFER_SIZE];
 
-            sprintf(fullFilePath, "./%s/%s", DEFAULT_MEDIA_DIR, commandArg);
-            printf("Full filepath is %s\n", fullFilePath);
+            sprintf(fullFilePath, "./%s/%s", DEFAULT_MEDIA_DIR, commandArg);            
 
             int fileToRead, readStream, writeStream;
 
             fileToRead = open(fullFilePath, O_RDONLY, 644);
 			
-
-
-
             if(fileToRead < 0)
               fprintf(stderr, "Server: Unable to process %s: %s\n", commandArg, strerror(errno));
 
-            // Send a response to the client that the file sent is
-            // valid and that we can start writing immediately
-                sprintf(serverReply, "%d %d", RPC_SUCCESS, START_WRITING);
-                printf("CommandArg is %s\n", commandArg);
+                // Send a response to the client that the file sent is
+                // valid and that we can start writing immediately
+                sprintf(serverReply, "%d %d", RPC_SUCCESS, START_WRITING);              
                 sprintf(commandArg, "%s\n", commandArg);
-				//sending file name??
-                //SSL_write(ssl, commandArg, strlen(commandArg) + 1);
-                
-
-                // SSL_write(ssl, serverReply, strlen(serverReply));
-                // SSL_write(ssl, commandArg)    
+				
                 struct stat fileStats;
                 off_t fileSize;
                 stat(fullFilePath, &fileStats);
 
 
-				//DP: sending file size first, recieved with buffered reader
+        				//DP: sending file size first, recieved with buffered reader
                 fileSize = fileStats.st_size;
-				printf("File Size = %d\n", fileSize);
-				char size[BUFFER_SIZE];
-				sprintf(size, "%d\n", fileSize);
-				
-				SSL_write(ssl,size, BUFFER_SIZE);
-				//DP: End of what I did here
+        				printf("File Size = %d\n", fileSize);
+        				char size[BUFFER_SIZE];
+        				sprintf(size, "%d\n", fileSize);
+        				
+        				SSL_write(ssl,size, BUFFER_SIZE);
+        				//DP: End of what I did here
 
                 char fileBuffer[BUFFER_SIZE];
 
                 int total = 0;
-                // bzero(fileBuffer, BUFFER_SIZE);
-            // Read the filestream in BUFFER_SIZE chunks and store in buffer
-
-                // if(fileSize >= BUFFER_SIZE)
-                  // readStream = read(fileToRead, fileBuffer, BUFFER_SIZE);
 
 
-                // else
-
-                  // readStream = read(fileToRead, fileBuffer, fileSize + 1);
-
-
-            // If writing to the socket fails at any point,
-            // we terminate the read and notify the client
-            // by setting writeChunkSuccess to 1
+                // If writing to the socket fails at any point,
+                // we terminate the read and notify the client
+                // by setting writeChunkSuccess to 1
                 int writeChunkSuccess = 0;
-                printf("We're getting here\n");
 
-            // While we still have chunks to read...
+                // While we still have chunks to read...
                 do{
                   readStream = read(fileToRead, fileBuffer, BUFFER_SIZE);
                   total += readStream;
-                  //printf("Total is currently %d, total size is %d\n", total, fileSize);
-                // while(readStream > 0 && writeChunkSuccess == 0){
 
-              // Keeps track of total bytes written
-                  // total += readStream;
-
-                  // fileBuffer[strlen(fileBuffer) + 1] = '\0';
-                  // fileBuffer[strlen(fileBuffer) - 1] = '\0';
-                  // printf("Writing \"%s\" to socket\n", fileBuffer);
-              // Write the contents of buffer from the readstream to the client socket
+                  // Write the contents of buffer from the readstream to the client socket
                   writeStream = SSL_write(ssl, fileBuffer, readStream);
 
-              // If there was a failure to write to the socket..
+                  // If there was a failure to write to the socket..
                   if(writeStream < 0){
 
-                // Notify client and end read/write loop by setting
-                // writeChunkSuccess to 1
+                    // Notify client and end read/write loop by setting
+                    // writeChunkSuccess to 1
                     fprintf(stderr, "Server: Unable to process %s: %s\n", commandArg, strerror(errno));
 
-                // Marshal error parameters and send to client
+                    // Marshal error parameters and send to client
                     sprintf(serverReply, "%d %d", SERVER_FAIL, errno);
                     SSL_write(ssl, serverReply, strlen(serverReply));  
 
@@ -516,171 +462,25 @@ int main(int argc, char **argv) {
                     close(fileToRead);
 
                     writeChunkSuccess = 1;
-                    return 9;
-                  }
-
-                  // bzero(fileBuffer, BUFFER_SIZE);
-              // Read next BUFFER_SIZE chunk and store in buffer.
+                    return -1;
+                  }                
                   
                 }while(readStream > 0);
+
                 close(readStream);
                 close(writeStream);
                 close(fileToRead);
 
-                printf("Finished writing\n");
+                printf("%d: Finished writing \"%s\" to client.\n", getpid(), commandArg);
                 SSL_write(ssl, "\n", strlen("\n"));
 
                 SSL_write(ssl, "FOE\n", strlen("FOE\n"));
-
-
 
           } else {
             printf("Invalid command issued %s", buffer);
           }
 
-          // printf("%d: Server: Terminating SSL session and TCP connection with client (%s)\n",
-          //   getpid(), client_addr);
-          // SSL_free(ssl);
-          // close(client);
-
-
-      // // If it's an invalid command...
-      //     if(strncmp(buffer, "downloadfilenow ", 16) != 0){
-
-      //   // Load the command so we can print an error
-      //       sscanf(buffer, "%s %s", command, commandVal);
-      //       printf("%d: Server: Invalid command issued '%s'\n", getpid(), command);
-
-      //   // Marshal error parameters and send to client
-      //       sprintf(serverReply, "%d %d", ERR_RPC, INVALID_COMMAND);
-      //       SSL_write(ssl, serverReply, strlen(serverReply));         
-
-      // // Too many arguments...
-      //     }else if(sscanf(buffer, "downloadfilenow %s %s", commandVal, dummy) == 2){
-      //       printf("%d: Server: Too many arguments sent\n", getpid());
-
-      //   // Marshal error parameters and send to client
-      //       sprintf(serverReply, "%d %d", ERR_RPC, TOO_MANY_ARGS);
-      //       SSL_write(ssl, serverReply, strlen(serverReply));         
-
-      // // Too few arguments...
-      //     }else if(sscanf(buffer, "downloadfilenow %s", commandVal) != 1){
-      //       printf("%d: Server: Too few arguments sent\n", getpid());
-
-      //   // Marshal error parameters and send to client
-      //       sprintf(serverReply, "%d %d", ERR_RPC, TOO_FEW_ARGS);
-      //       SSL_write(ssl, serverReply, strlen(serverReply));         
-
-      // // Correct command and number of arguments...
-      //     }else if(sscanf(buffer, "downloadfilenow %s", commandVal) == 1){
-
-      //   // Check if it's a directory, if it is.. then abort.
-      //       struct stat fileStats;
-
-      //       stat(commandVal, &fileStats);
-
-      //       if(S_ISDIR(fileStats.st_mode)){
-      //         printf("%d: Server: Unable to process %s: %s.\n", getpid(), commandVal, strerror(EISDIR));
-
-      //     // Marshal error parameters and send to client
-      //         sprintf(serverReply, "%d %d", SERVER_FAIL, EISDIR);
-      //         SSL_write(ssl, serverReply, strlen(serverReply)); 
-
-      //       }else{
-
-      //     // Initialize fileBuffer and read/stream variables
-      //         int fileToRead, readStream, writeStream;
-      //         char fileBuffer[BUFFER_SIZE];
-
-      //     // Keeps track of the total size of the file
-      //         int total = 0;
-
-      //     // Opens the file we need to read
-      //         fileToRead = open(commandVal, O_RDONLY, 644);
-
-      //     // If the file doesn't exist, or no perms, etc, we can't continue.
-      //         if(fileToRead < 0){
-      //           fprintf(stderr, "Server: Unable to process %s: %s\n", commandVal, strerror(errno));
-
-      //       // Marshal error parameters and send to client
-      //           sprintf(serverReply, "%d %d", SERVER_FAIL, errno);
-      //           SSL_write(ssl, serverReply, strlen(serverReply));            
-
-      //     // Start the write process
-      //         }else{
-
-      //       // Send a response to the client that the file sent is
-      //       // valid and that we can start writing immediately
-      //           sprintf(serverReply, "%d %d", RPC_SUCCESS, START_WRITING);
-      //           SSL_write(ssl, serverReply, strlen(serverReply));    
-
-      //       // Read the filestream in BUFFER_SIZE chunks and store in buffer
-      //           readStream = read(fileToRead, buffer, BUFFER_SIZE);
-
-      //       // If writing to the socket fails at any point,
-      //       // we terminate the read and notify the client
-      //       // by setting writeChunkSuccess to 1
-      //           int writeChunkSuccess = 0;
-
-      //       // While we still have chunks to read...
-      //           while(readStream > 0 && writeChunkSuccess == 0){
-
-      //         // Keeps track of total bytes written
-      //             total += readStream;
-
-      //         // Write the contents of buffer from the readstream to the client socket
-      //             writeStream = SSL_write(ssl, buffer, readStream);
-
-      //         // If there was a failure to write to the socket..
-      //             if(writeStream < 0){
-
-      //           // Notify client and end read/write loop by setting
-      //           // writeChunkSuccess to 1
-      //               fprintf(stderr, "Server: Unable to process %s: %s\n", commandVal, strerror(errno));
-
-      //           // Marshal error parameters and send to client
-      //               sprintf(serverReply, "%d %d", SERVER_FAIL, errno);
-      //               SSL_write(ssl, serverReply, strlen(serverReply));  
-
-      //               close(readStream);
-      //               close(writeStream);
-      //               close(fileToRead);
-
-      //               writeChunkSuccess = 1;
-      //             }
-
-      //         // Read next BUFFER_SIZE chunk and store in buffer.
-      //             readStream = read(fileToRead, buffer, BUFFER_SIZE);
-      //           }
-
-      //       // If we managed to successfully write all chunks to the client...
-      //       // If there was an error, it was printed before exiting the loop.
-      //           if(writeChunkSuccess == 0){
-
-      //         // Send a response to the client that we have finished writing
-      //         // Without this, it will send an extra 3 bytes with
-      //         // any other response we may send
-      //             sprintf(serverReply, "%d %d", RPC_SUCCESS, FINISHED_WRITING);
-      //             SSL_write(ssl, serverReply, strlen(serverReply));    
-
-      //         // File transfer complete
-      //             printf("%d: Server: Completed file transfer to client (%s)\n", getpid(), client_addr);
-      //             printf("%d: Server: Successfully transferred file %s (%d bytes) to client\n", getpid(), commandVal, total);
-
-      //             SSL_write(ssl, serverReply, strlen(serverReply));            
-
-      //           }
-
-      //       // Close all streams
-      //           close(readStream);
-      //           close(writeStream);
-      //           close(fileToRead);
-
-      //         }
-      //       }
-      //     }
-
-      // Terminate the SSL session, close the TCP connection, and clean up
+          // Terminate the SSL session, close the TCP connection, and clean up
           printf("%d: Server: Terminating SSL session and TCP connection with client (%s)\n",
             getpid(), client_addr);
           SSL_free(ssl);
@@ -689,7 +489,7 @@ int main(int argc, char **argv) {
       }
     }
 
-  // Tear down and clean up server data structures before terminating
+    // Tear down and clean up server data structures before terminating
     SSL_CTX_free(ssl_ctx);
     cleanup_openssl();
     close(sockfd);
