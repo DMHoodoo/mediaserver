@@ -385,7 +385,7 @@ int main(int argc, char **argv) {
 
               if(directory) {
                 while((dir = readdir(directory)) != NULL) {
-                  sprintf(serverReply, "%s\r\n", dir->d_name);
+                  sprintf(serverReply, "%s\n", dir->d_name);
 
                   if(strcmp(dir->d_name, ".") != 0 && strcmp(dir->d_name, "..") != 0){
                     int tempWriteStream;
@@ -435,7 +435,7 @@ int main(int argc, char **argv) {
               // Send a response to the client that the file sent is
               // valid and that we can start writing immediately
               sprintf(serverReply, "%d %d", RPC_SUCCESS, START_WRITING);              
-              sprintf(commandArg, "%s\n", commandArg);
+              // sprintf(commandArg, "%s\n", commandArg);
 
               struct stat fileStats;
               off_t fileSize;
