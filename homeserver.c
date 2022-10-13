@@ -369,9 +369,8 @@ int main(int argc, char **argv) {
 
             // If the client requests if the connection is still alive, send back a pong
             } else if(strncmp(buffer, RPC_REQUEST_ISALIVE, strlen(RPC_REQUEST_ISALIVE)) == 0){            
-
-              sprintf(serverReply, "%s", "pong\n");
-              SSL_write(ssl, serverReply, strlen(serverReply));
+              sprintf(serverReply, "%s\n", "pong");
+              SSL_write(ssl, serverReply, strlen(serverReply) + 1);
 
             // If the user requested the list of the directory
             }else if(strncmp(buffer, RPC_REQUEST_LISTING, strlen(RPC_REQUEST_LISTING)) == 0){
@@ -405,7 +404,8 @@ int main(int argc, char **argv) {
                   }                
                 }         
 
-                sprintf(serverReply, "%d\r\n", RPC_SUCCESS);     
+                sprintf(serverReply, "%d\n", RPC_SUCCESS);     
+
                 SSL_write(ssl, serverReply, strlen(serverReply) + 1);
                 closedir(directory);
               }
@@ -496,8 +496,6 @@ int main(int argc, char **argv) {
 
               printf("%d: Finished writing \"%s\" to client.\n", getpid(), commandArg);
               SSL_write(ssl, "\n", strlen("\n"));
-
-              SSL_write(ssl, "FOE\n", strlen("FOE\n"));
 
             } else {
               printf("Invalid command issued %s\n", buffer);
