@@ -277,7 +277,7 @@ int main(int argc, char **argv) {
         exit(EXIT_FAILURE);
       }
     } else if(backupPID == 0) {
-      printf("%d: Assigning port %d to %d\n", getpid(), DEFAULT_PORT_BACKUP);
+      printf("%d: Assigning port %d\n", getpid(), DEFAULT_PORT_BACKUP);
       port = DEFAULT_PORT_BACKUP;
     }
 
@@ -421,7 +421,7 @@ int main(int argc, char **argv) {
 
               printf("%d: Attempting to send file \"%s\" to client.\n", getpid(), commandArg);
 
-              char fullFilePath[BUFFER_SIZE];
+              char fullFilePath[BUFFER_SIZE + sizeof(commandArg) + strlen(DEFAULT_MEDIA_DIR) + 4];
 
               sprintf(fullFilePath, "./%s/%s", DEFAULT_MEDIA_DIR, commandArg);            
 
@@ -444,9 +444,9 @@ int main(int argc, char **argv) {
 
         		  //DP: sending file size first, recieved with buffered reader
               fileSize = fileStats.st_size;
-              printf("File Size = %d\n", fileSize);
+              printf("File Size = %ld\n", fileSize);
               char size[BUFFER_SIZE];
-              sprintf(size, "%d\n", fileSize);
+              sprintf(size, "%ld\n", fileSize);
 
               SSL_write(ssl,size, BUFFER_SIZE);
     				  //DP: End of what I did here
