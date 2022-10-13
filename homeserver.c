@@ -354,7 +354,7 @@ int main(int argc, char **argv) {
             char dummy[BUFFER_SIZE];
 
             // Buffer for sending replies to the client
-            char serverReply[BUFFER_SIZE];
+            char serverReply[BUFFER_SIZE + 2];
 
             // If the client requests a disconnect, properly cleanup, close, and return the forked process
             if(strncmp(buffer, RPC_DISCONNECT, strlen(RPC_DISCONNECT)) == 0){
