@@ -12,6 +12,10 @@ SYNOPSIS: This program is a small server application that receives incoming TCP
           command prompt type:
 
           openssl req -newkey rsa:2048 -nodes -keyout key.pem -x509 -days 365 -out cert.pem
+          Dependencies:
+          sudo apt-get install libsqlite3-dev
+          sudo apt-get install sqlite3
+          sudo apt-get install openssl-dev
 
           This will create two files: a private key contained in the file
           'key.pem' and a certificate containing a public key in the file
@@ -31,15 +35,22 @@ SYNOPSIS: This program is a small server application that receives incoming TCP
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <openssl/ssl.h>
+#include <openssl/conf.h>
 #include <openssl/err.h>
+#include <openssl/evp.h>
+#include <openssl/sha.h>
+#include <openssl/rand.h>
+#include <openssl/md5.h>
 #include <signal.h>
 #include <dirent.h>
+#include <sqlite3.h>
 
 #define BUFFER_SIZE       256
 #define DEFAULT_PORT      4433
 #define CERTIFICATE_FILE  "cert.pem"
 #define KEY_FILE          "key.pem"
 #define DEFAULT_MEDIA_DIR "media"
+#define DEFAULT_DB_NAME "users.db"
 
 #define DEFAULT_PORT_MAIN 4433
 #define DEFAULT_PORT_BACKUP 4434
@@ -151,6 +162,8 @@ void cleanup_openssl() {
   EVP_cleanup();
 }
 
+
+
 /******************************************************************************
 
 An SSL_CTX object is an instance of a factory design pattern that produces SSL
@@ -219,6 +232,255 @@ if (SSL_CTX_use_PrivateKey_file(ssl_ctx, KEY_FILE, SSL_FILETYPE_PEM) <= 0 ) {
 }
 }
 
+void handleErrors(){
+  ERR_print_errors_fp(stderr);
+}
+
+int encrypt(unsigned char *plaintext, int plaintext_len, unsigned char *key,
+            unsigned char *iv, unsigned char *ciphertext)
+{
+    EVP_CIPHER_CTX *ctx;
+
+    int len;
+
+    int ciphertext_len;
+
+    /* Create and initialise the context */
+    if(!(ctx = EVP_CIPHER_CTX_new()))
+        handleErrors();
+
+    /*
+     * Initialise the encryption operation. IMPORTANT - ensure you use a key
+     * and IV size appropriate for your cipher
+     * In this example we are using 256 bit AES (i.e. a 256 bit key). The
+     * IV size for *most* modes is the same as the block size. For AES this
+     * is 128 bits
+     */
+    if(1 != EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv))
+        handleErrors();
+
+    /*
+     * Provide the message to be encrypted, and obtain the encrypted output.
+     * EVP_EncryptUpdate can be called multiple times if necessary
+     */
+    if(1 != EVP_EncryptUpdate(ctx, ciphertext, &len, plaintext, plaintext_len))
+        handleErrors();
+    ciphertext_len = len;
+
+    /*
+     * Finalise the encryption. Further ciphertext bytes may be written at
+     * this stage.
+     */
+    if(1 != EVP_EncryptFinal_ex(ctx, ciphertext + len, &len))
+        handleErrors();
+    ciphertext_len += len;
+
+    /* Clean up */
+    EVP_CIPHER_CTX_free(ctx);
+
+    return ciphertext_len;
+}
+
+int decrypt(unsigned char *ciphertext, int ciphertext_len, unsigned char *key,
+            unsigned char *iv, unsigned char *plaintext)
+{
+    EVP_CIPHER_CTX *ctx;
+
+    int len;
+
+    int plaintext_len;
+
+    /* Create and initialise the context */
+    if(!(ctx = EVP_CIPHER_CTX_new()))
+        handleErrors();
+
+    /*
+     * Initialise the decryption operation. IMPORTANT - ensure you use a key
+     * and IV size appropriate for your cipher
+     * In this example we are using 256 bit AES (i.e. a 256 bit key). The
+     * IV size for *most* modes is the same as the block size. For AES this
+     * is 128 bits
+     */
+    if(1 != EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv))
+        handleErrors();
+
+    /*
+     * Provide the message to be decrypted, and obtain the plaintext output.
+     * EVP_DecryptUpdate can be called multiple times if necessary.
+     */
+    if(1 != EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_len))
+        handleErrors();
+    plaintext_len = len;
+
+    /*
+     * Finalise the decryption. Further plaintext bytes may be written at
+     * this stage.
+     */
+    if(1 != EVP_DecryptFinal_ex(ctx, plaintext + len, &len))
+        handleErrors();
+    plaintext_len += len;
+
+    /* Clean up */
+    EVP_CIPHER_CTX_free(ctx);
+
+    return plaintext_len;
+}
+
+static int callback(void *NotUsed, int argc, char **argv, char **azColName) {
+   int i;
+   for(i = 0; i<argc; i++) {
+      printf("%s = %s\n", azColName[i], argv[i] ? argv[i] : "NULL");
+   }
+   printf("\n");
+   return 0;
+}
+
+void setupDB(){
+  sqlite3 *db;
+  sqlite3_stmt *response;
+  char *zErrMsg = 0;
+  char* sqlStatement;
+
+  int dbCode = sqlite3_open(DEFAULT_DB_NAME, &db);
+
+  if(dbCode){
+    fprintf(stderr, "Unable to create/open %s\n", sqlite3_errmsg(db));
+  } else{
+    printf("%s succesfully created/opened.\n", DEFAULT_DB_NAME);
+
+    sqlStatement = "CREATE TABLE IF NOT EXISTS USERS("  \
+      "USERNAME char(50) PRIMARY KEY NOT NULL," \
+      "PASSWORD CHAR(50) NOT NULL," \
+      "SALT CHAR(50) NOT NULL);";
+
+      dbCode = sqlite3_exec(db, sqlStatement, callback, 0, &zErrMsg);
+
+      if(dbCode != SQLITE_OK){
+        fprintf(stderr, "SQlite3 has encountered an error: %s\n", zErrMsg);
+        sqlite3_free(zErrMsg);
+      }else{
+        printf("Table succesfully created.\n");
+      }
+
+      //Test Code
+      sqlStatement = "INSERT INTO USERS(USERNAME, PASSWORD, SALT) " \
+                     "VALUES ('A', 'B', 'C');";
+
+
+      dbCode = sqlite3_exec(db, sqlStatement, callback, 0, &zErrMsg);
+
+      if(dbCode != SQLITE_OK){
+        fprintf(stderr, "SQL Error: %s\n", zErrMsg);
+        sqlite3_free(zErrMsg);
+      } else{
+        printf("Records created succesffully\n");
+      }
+
+      printf("Testing salt/hash\n");
+
+    /* A 256 bit key */
+    unsigned char *key = (unsigned char *)"01234567890123456789012345678901";
+
+    /* A 128 bit IV */
+    unsigned char *iv = (unsigned char *)"0123456789012345";
+
+    /* Message to be encrypted */
+    unsigned char *plaintext =
+        (unsigned char *)"The quick brown fox jumps over the lazy dog";
+
+    /*
+     * Buffer for ciphertext. Ensure the buffer is long enough for the
+     * ciphertext which may be longer than the plaintext, depending on the
+     * algorithm and mode.
+     */
+    unsigned char ciphertext[128];
+
+    /* Buffer for the decrypted text */
+    unsigned char decryptedtext[128];
+
+    int decryptedtext_len, ciphertext_len;
+
+    /* Encrypt the plaintext */
+    ciphertext_len = encrypt (plaintext, strlen ((char *)plaintext), key, iv,
+                              ciphertext);
+
+    /* Do something useful with the ciphertext here */
+    printf("Ciphertext is:\n");
+    BIO_dump_fp (stdout, (const char *)ciphertext, ciphertext_len);
+
+    /* Decrypt the ciphertext */
+    decryptedtext_len = decrypt(ciphertext, ciphertext_len, key, iv,
+                                decryptedtext);
+
+    /* Add a NULL terminator. We are expecting printable text */
+    decryptedtext[decryptedtext_len] = '\0';
+
+    /* Show the decrypted text */
+    printf("Decrypted text is:\n");
+    printf("%s\n", decryptedtext);
+
+      // SHA256_CTX context;
+      // unsigned char md[SHA256_DIGEST_LENGTH];
+      // unsigned char salt[32];
+      // int test = RAND_bytes(salt, 32);
+
+      // SHA256_Init(&context);
+      // SHA256_Update(&context, (unsigned char*)"abcd", strlen("abcd"));
+      // SHA256_Final(md, &context);
+
+      // printf("Md is currently %s\n", md);
+      // printf("Salt is currently %s\n", salt);
+      // printf("test is %d\n", test);
+
+
+
+
+
+      //Test Code
+  }
+
+  sqlite3_close(db);
+
+}
+
+
+void getMD5Sum(char* filename, unsigned char* md5Sum){
+  MD5_CTX ctx;
+
+  char md5Buffer[BUFFER_SIZE];
+
+  ssize_t bytes;
+
+  // unsigned char md5Sum[MD5_DIGEST_LENGTH];
+
+  MD5_Init(&ctx);
+  char fullFilePath[BUFFER_SIZE + strlen(filename) + strlen(DEFAULT_MEDIA_DIR) + 4];
+  sprintf(fullFilePath, "./%s/%s", DEFAULT_MEDIA_DIR, filename);            
+
+  int fileToRead, readStream, writeStream;
+
+  fileToRead = open(fullFilePath, O_RDONLY, 644);
+
+  if(fileToRead < 0)
+    fprintf(stderr, "Server: Unable to process %s: %s\n", filename, strerror(errno));
+
+  bytes = read(fileToRead, md5Buffer, BUFFER_SIZE);
+
+  while(bytes > 0){
+    MD5_Update(&ctx, md5Buffer, bytes);
+    bytes = read(fileToRead, md5Buffer, BUFFER_SIZE);
+  }
+
+  MD5_Final(md5Sum, &ctx);
+
+  // int n;
+  // for(n = 0; n < MD5_DIGEST_LENGTH; n++)
+  //   printf("%02x", md5Sum[n]);
+  // printf("\n");
+
+  // return (unsigned char*)md5Sum;
+}
+
 /******************************************************************************
 
 The sequence of steps required to establish a secure SSL/TLS connection is:
@@ -244,6 +506,17 @@ int main(int argc, char **argv) {
   unsigned int sockfd;
   unsigned int port;
   char         buffer[BUFFER_SIZE];
+
+  // unsigned char md5Sum[MD5_DIGEST_LENGTH];
+  // getMD5Sum("intro.mp4", md5Sum);
+
+  // int n;
+  // for(n = 0; n < MD5_DIGEST_LENGTH; n++)
+  //   printf("%02x", md5Sum[n]);
+  // printf("\n");
+
+  // return;
+  // setupDB();
 
   homePID = getpid();
   mainPID = fork();
@@ -341,6 +614,7 @@ int main(int argc, char **argv) {
           while(true){
             fflush(stdout);
 
+            printf("Attempting to read request..\n");
             // Read client request
             SSL_read(ssl, buffer, BUFFER_SIZE);
 
@@ -356,8 +630,34 @@ int main(int argc, char **argv) {
             // Buffer for sending replies to the client
             char serverReply[BUFFER_SIZE + 2];
 
+            if(strncmp(buffer, RPC_REQUEST_MD5, strlen(RPC_REQUEST_MD5)) == 0){
+
+              // This is the pattern %[^\"]
+              // % indicates the start of something to look for
+              // [] tells us to keep searching until X character
+              // ^ is the NOT operator
+              // We escape the double-quote character
+              // So we're saying, keep reading until you reach a double-quote!
+              sscanf(buffer, "%s \"%[^\"]", command, commandArg);
+
+              unsigned char md5Sum[MD5_DIGEST_LENGTH];
+              char md5String[MD5_DIGEST_LENGTH + 1];  
+
+              getMD5Sum(commandArg, md5Sum);
+
+              md5String[0] = '\0';
+              
+              int i;
+              for(i = 0; i < MD5_DIGEST_LENGTH; i++){
+                sprintf(buffer, "%02x", md5Sum[i]);
+                strncat(md5String, buffer, strlen(buffer));
+              }
+
+              SSL_write(ssl, md5String, strlen(md5String));
+              SSL_write(ssl, "\n", strlen("\n"));
+
             // If the client requests a disconnect, properly cleanup, close, and return the forked process
-            if(strncmp(buffer, RPC_DISCONNECT, strlen(RPC_DISCONNECT)) == 0){
+            }else if(strncmp(buffer, RPC_DISCONNECT, strlen(RPC_DISCONNECT)) == 0){
 
               // Terminate the SSL session, close the TCP connection, and clean up
               printf("%d: Server: Terminating SSL session and TCP connection with client (%s)\n",
@@ -408,6 +708,8 @@ int main(int argc, char **argv) {
 
                 SSL_write(ssl, serverReply, strlen(serverReply) + 1);
                 closedir(directory);
+
+                printf("Finished writing list to client...\n");
               }
             } else if(strncmp(buffer, RPC_REQUEST_FILE, strlen(RPC_REQUEST_FILE)) == 0){
 
