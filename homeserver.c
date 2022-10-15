@@ -1,29 +1,13 @@
 /******************************************************************************
 
-PROGRAM:  ssl-server.c
-AUTHOR:   Hassan Khan
+PROGRAM:  homeserver.c
+AUTHOR:   Hassan Khan & Dacia Pennington
 COURSE:   CS469 - Distributed Systems (Regis University)
-SYNOPSIS: This program is a small server application that receives incoming TCP
-          connections from clients and transfers a requested file from the
-          server to the client.  It uses a secure SSL/TLS connection using
-          a certificate generated with the openssl application.
-
-          To create a self-signed certificate your server can use, at the
-          command prompt type:
-
-          openssl req -newkey rsa:2048 -nodes -keyout key.pem -x509 -days 365 -out cert.pem
-          Dependencies:
-          sudo apt-get install libsqlite3-dev
-          sudo apt-get install sqlite3
+SYNOPSIS: Home media-server that forks a primary/backup process. Distributes
+          media, verifies listings, and handles incoming client connections.
+          Requires openssl
           sudo apt-get install openssl-dev
-
-          This will create two files: a private key contained in the file
-          'key.pem' and a certificate containing a public key in the file
-          'cert.pem'. Your server will require both in order to operate
-          properly. These files are not needed by the client.
-
-          Some of the code and descriptions can be found in "Network Security
-          with OpenSSL", O'Reilly Media, 2002.
+          
 
 ******************************************************************************/
 #include <fcntl.h>
@@ -43,14 +27,12 @@ SYNOPSIS: This program is a small server application that receives incoming TCP
 #include <openssl/md5.h>
 #include <signal.h>
 #include <dirent.h>
-#include <sqlite3.h>
 
 #define BUFFER_SIZE       256
 #define DEFAULT_PORT      4433
 #define CERTIFICATE_FILE  "cert.pem"
 #define KEY_FILE          "key.pem"
 #define DEFAULT_MEDIA_DIR "media"
-#define DEFAULT_DB_NAME "users.db"
 
 #define DEFAULT_PORT_MAIN 4433
 #define DEFAULT_PORT_BACKUP 4434
@@ -233,218 +215,6 @@ if (SSL_CTX_use_PrivateKey_file(ssl_ctx, KEY_FILE, SSL_FILETYPE_PEM) <= 0 ) {
 }
 }
 
-void handleErrors(){
-  ERR_print_errors_fp(stderr);
-}
-
-int encrypt(unsigned char *plaintext, int plaintext_len, unsigned char *key,
-            unsigned char *iv, unsigned char *ciphertext)
-{
-    EVP_CIPHER_CTX *ctx;
-
-    int len;
-
-    int ciphertext_len;
-
-    /* Create and initialise the context */
-    if(!(ctx = EVP_CIPHER_CTX_new()))
-        handleErrors();
-
-    /*
-     * Initialise the encryption operation. IMPORTANT - ensure you use a key
-     * and IV size appropriate for your cipher
-     * In this example we are using 256 bit AES (i.e. a 256 bit key). The
-     * IV size for *most* modes is the same as the block size. For AES this
-     * is 128 bits
-     */
-    if(1 != EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv))
-        handleErrors();
-
-    /*
-     * Provide the message to be encrypted, and obtain the encrypted output.
-     * EVP_EncryptUpdate can be called multiple times if necessary
-     */
-    if(1 != EVP_EncryptUpdate(ctx, ciphertext, &len, plaintext, plaintext_len))
-        handleErrors();
-    ciphertext_len = len;
-
-    /*
-     * Finalise the encryption. Further ciphertext bytes may be written at
-     * this stage.
-     */
-    if(1 != EVP_EncryptFinal_ex(ctx, ciphertext + len, &len))
-        handleErrors();
-    ciphertext_len += len;
-
-    /* Clean up */
-    EVP_CIPHER_CTX_free(ctx);
-
-    return ciphertext_len;
-}
-
-int decrypt(unsigned char *ciphertext, int ciphertext_len, unsigned char *key,
-            unsigned char *iv, unsigned char *plaintext)
-{
-    EVP_CIPHER_CTX *ctx;
-
-    int len;
-
-    int plaintext_len;
-
-    /* Create and initialise the context */
-    if(!(ctx = EVP_CIPHER_CTX_new()))
-        handleErrors();
-
-    /*
-     * Initialise the decryption operation. IMPORTANT - ensure you use a key
-     * and IV size appropriate for your cipher
-     * In this example we are using 256 bit AES (i.e. a 256 bit key). The
-     * IV size for *most* modes is the same as the block size. For AES this
-     * is 128 bits
-     */
-    if(1 != EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv))
-        handleErrors();
-
-    /*
-     * Provide the message to be decrypted, and obtain the plaintext output.
-     * EVP_DecryptUpdate can be called multiple times if necessary.
-     */
-    if(1 != EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_len))
-        handleErrors();
-    plaintext_len = len;
-
-    /*
-     * Finalise the decryption. Further plaintext bytes may be written at
-     * this stage.
-     */
-    if(1 != EVP_DecryptFinal_ex(ctx, plaintext + len, &len))
-        handleErrors();
-    plaintext_len += len;
-
-    /* Clean up */
-    EVP_CIPHER_CTX_free(ctx);
-
-    return plaintext_len;
-}
-
-static int callback(void *NotUsed, int argc, char **argv, char **azColName) {
-   int i;
-   for(i = 0; i<argc; i++) {
-      printf("%s = %s\n", azColName[i], argv[i] ? argv[i] : "NULL");
-   }
-   printf("\n");
-   return 0;
-}
-
-void setupDB(){
-  sqlite3 *db;
-  sqlite3_stmt *response;
-  char *zErrMsg = 0;
-  char* sqlStatement;
-
-  int dbCode = sqlite3_open(DEFAULT_DB_NAME, &db);
-
-  if(dbCode){
-    fprintf(stderr, "Unable to create/open %s\n", sqlite3_errmsg(db));
-  } else{
-    printf("%s succesfully created/opened.\n", DEFAULT_DB_NAME);
-
-    sqlStatement = "CREATE TABLE IF NOT EXISTS USERS("  \
-      "USERNAME char(50) PRIMARY KEY NOT NULL," \
-      "PASSWORD CHAR(50) NOT NULL," \
-      "SALT CHAR(50) NOT NULL);";
-
-      dbCode = sqlite3_exec(db, sqlStatement, callback, 0, &zErrMsg);
-
-      if(dbCode != SQLITE_OK){
-        fprintf(stderr, "SQlite3 has encountered an error: %s\n", zErrMsg);
-        sqlite3_free(zErrMsg);
-      }else{
-        printf("Table succesfully created.\n");
-      }
-
-      //Test Code
-      sqlStatement = "INSERT INTO USERS(USERNAME, PASSWORD, SALT) " \
-                     "VALUES ('A', 'B', 'C');";
-
-
-      dbCode = sqlite3_exec(db, sqlStatement, callback, 0, &zErrMsg);
-
-      if(dbCode != SQLITE_OK){
-        fprintf(stderr, "SQL Error: %s\n", zErrMsg);
-        sqlite3_free(zErrMsg);
-      } else{
-        printf("Records created succesffully\n");
-      }
-
-      printf("Testing salt/hash\n");
-
-    /* A 256 bit key */
-    unsigned char *key = (unsigned char *)"01234567890123456789012345678901";
-
-    /* A 128 bit IV */
-    unsigned char *iv = (unsigned char *)"0123456789012345";
-
-    /* Message to be encrypted */
-    unsigned char *plaintext =
-        (unsigned char *)"The quick brown fox jumps over the lazy dog";
-
-    /*
-     * Buffer for ciphertext. Ensure the buffer is long enough for the
-     * ciphertext which may be longer than the plaintext, depending on the
-     * algorithm and mode.
-     */
-    unsigned char ciphertext[128];
-
-    /* Buffer for the decrypted text */
-    unsigned char decryptedtext[128];
-
-    int decryptedtext_len, ciphertext_len;
-
-    /* Encrypt the plaintext */
-    ciphertext_len = encrypt (plaintext, strlen ((char *)plaintext), key, iv,
-                              ciphertext);
-
-    /* Do something useful with the ciphertext here */
-    printf("Ciphertext is:\n");
-    BIO_dump_fp (stdout, (const char *)ciphertext, ciphertext_len);
-
-    /* Decrypt the ciphertext */
-    decryptedtext_len = decrypt(ciphertext, ciphertext_len, key, iv,
-                                decryptedtext);
-
-    /* Add a NULL terminator. We are expecting printable text */
-    decryptedtext[decryptedtext_len] = '\0';
-
-    /* Show the decrypted text */
-    printf("Decrypted text is:\n");
-    printf("%s\n", decryptedtext);
-
-      // SHA256_CTX context;
-      // unsigned char md[SHA256_DIGEST_LENGTH];
-      // unsigned char salt[32];
-      // int test = RAND_bytes(salt, 32);
-
-      // SHA256_Init(&context);
-      // SHA256_Update(&context, (unsigned char*)"abcd", strlen("abcd"));
-      // SHA256_Final(md, &context);
-
-      // printf("Md is currently %s\n", md);
-      // printf("Salt is currently %s\n", salt);
-      // printf("test is %d\n", test);
-
-
-
-
-
-      //Test Code
-  }
-
-  sqlite3_close(db);
-
-}
-
-
 int getMD5Sum(char* filename, unsigned char* md5Sum){
   MD5_CTX ctx;
 
@@ -504,6 +274,11 @@ int main(int argc, char **argv) {
   unsigned int sockfd;
   unsigned int port;
   char         buffer[BUFFER_SIZE];
+
+  struct stat st;
+  if (stat("test", &st) == -1) {
+    mkdir("test", 0700);
+  }
 
   // unsigned char md5Sum[MD5_DIGEST_LENGTH];
   // getMD5Sum("intro.mp4", md5Sum);
@@ -632,7 +407,7 @@ int main(int argc, char **argv) {
             char serverReply[BUFFER_SIZE + 2];
 
             printf("Buffer is %s\n", buffer);
-            
+
             if(strncmp(buffer, RPC_REQUEST_MD5, strlen(RPC_REQUEST_MD5)) == 0){
 
               // This is the pattern %[^\"]
@@ -859,7 +634,7 @@ int main(int argc, char **argv) {
 
                   // Write the contents of buffer from the readstream to the client socket
                   writeStream = SSL_write(ssl, fileBuffer, readStream);
- 
+
                 }while(readStream > 0);
 
                 close(readStream);
@@ -868,7 +643,7 @@ int main(int argc, char **argv) {
 
                 printf("%d: Finished writing \"%s\" to client.\n", getpid(), commandArg);
                 SSL_write(ssl, "\n", strlen("\n"));
-            }
+              }
 
             } else {
               // Load the command so we can print an error
