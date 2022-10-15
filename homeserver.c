@@ -434,7 +434,7 @@ int main(int argc, char **argv) {
                 sprintf(serverReply, "%d %d\n", ERR_RPC, TOO_FEW_ARGS);
                 SSL_write(ssl, serverReply, strlen(serverReply));                   
               }else if(sscanf(buffer, "%s \"%[^\"] %s", command, commandArg, dummy) == 3 && strcmp(dummy, "\"") != 0){
-                printf("Bad double-quotes MD5\n", dummy);
+                // printf("Bad double-quotes MD5\n", dummy);
 
                 // Marshal error parameters and send to client
                 sprintf(serverReply, "%d %d\n", ERR_RPC, MALFORMED_REQUEST);
@@ -579,7 +579,7 @@ int main(int argc, char **argv) {
                 sprintf(serverReply, "%d %d\n", ERR_RPC, TOO_FEW_ARGS);
                 SSL_write(ssl, serverReply, strlen(serverReply));                   
               }else if(sscanf(buffer, "%s \"%[^\"] %s", command, commandArg, dummy) == 3 && strcmp(dummy, "\"") != 0){
-                printf("Bad double-quotes\n", dummy);
+                // printf("Bad double-quotes\n", dummy);
 
                 // Marshal error parameters and send to client
                 sprintf(serverReply, "%d %d\n", ERR_RPC, MALFORMED_REQUEST);
