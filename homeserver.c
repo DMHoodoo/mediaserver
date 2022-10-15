@@ -64,7 +64,7 @@ SYNOPSIS: This program is a small server application that receives incoming TCP
 #define RPC_REQUEST_FILE "requestfile "
 #define RPC_REQUEST_MD5 "requestmd5 "
 #define RPC_REQUEST_ISALIVE "ping"
-#define RPC_DISCONNECT "disconnect "
+#define RPC_DISCONNECT "disconnect"
 
 #define SERVER_FAIL 1
 
@@ -72,6 +72,7 @@ SYNOPSIS: This program is a small server application that receives incoming TCP
 #define INVALID_COMMAND 0
 #define TOO_FEW_ARGS 1
 #define TOO_MANY_ARGS 2
+#define MALFORMED_REQUEST 3
 
 /******************************************************************************
 
@@ -444,7 +445,7 @@ void setupDB(){
 }
 
 
-void getMD5Sum(char* filename, unsigned char* md5Sum){
+int getMD5Sum(char* filename, unsigned char* md5Sum){
   MD5_CTX ctx;
 
   char md5Buffer[BUFFER_SIZE];
@@ -461,8 +462,10 @@ void getMD5Sum(char* filename, unsigned char* md5Sum){
 
   fileToRead = open(fullFilePath, O_RDONLY, 644);
 
-  if(fileToRead < 0)
+  if(fileToRead < 0){
     fprintf(stderr, "Server: Unable to process %s: %s\n", filename, strerror(errno));
+    return errno;
+  }
 
   bytes = read(fileToRead, md5Buffer, BUFFER_SIZE);
 
@@ -473,12 +476,7 @@ void getMD5Sum(char* filename, unsigned char* md5Sum){
 
   MD5_Final(md5Sum, &ctx);
 
-  // int n;
-  // for(n = 0; n < MD5_DIGEST_LENGTH; n++)
-  //   printf("%02x", md5Sum[n]);
-  // printf("\n");
-
-  // return (unsigned char*)md5Sum;
+  return 0;
 }
 
 /******************************************************************************
@@ -610,11 +608,12 @@ int main(int argc, char **argv) {
           printf("%d: Server: Established SSL/TLS connection with client (%s)\n",
             getpid(), client_addr);
 
-            // Keep the TCP connection alive until disconnected/killed
+          // Keep the TCP connection alive until disconnected/killed
           while(true){
-            fflush(stdout);
 
             printf("Attempting to read request..\n");
+
+            // printf("Buffer[0] is %c\n", buffer[0]);
             // Read client request
             SSL_read(ssl, buffer, BUFFER_SIZE);
 
@@ -627,9 +626,13 @@ int main(int argc, char **argv) {
             // Dummy value for evaluating amount of arguments
             char dummy[BUFFER_SIZE];
 
+            char dummy2[BUFFER_SIZE];
+
             // Buffer for sending replies to the client
             char serverReply[BUFFER_SIZE + 2];
 
+            printf("Buffer is %s\n", buffer);
+            
             if(strncmp(buffer, RPC_REQUEST_MD5, strlen(RPC_REQUEST_MD5)) == 0){
 
               // This is the pattern %[^\"]
@@ -638,78 +641,142 @@ int main(int argc, char **argv) {
               // ^ is the NOT operator
               // We escape the double-quote character
               // So we're saying, keep reading until you reach a double-quote!
-              sscanf(buffer, "%s \"%[^\"]", command, commandArg);
+              // sscanf(buffer, "%s \"%[^\"]", command, commandArg);
 
-              unsigned char md5Sum[MD5_DIGEST_LENGTH];
-              char md5String[MD5_DIGEST_LENGTH + 1];  
+              printf("Getting md5 of %s\n", commandArg);
 
-              getMD5Sum(commandArg, md5Sum);
+              if(sscanf(buffer, "%s \"%[^\"] %s %s", command, commandArg, dummy, dummy2) == 4){
+                printf("Too many arguments for MD5\n");
+                printf("Dummy is %s\n", dummy);
 
-              md5String[0] = '\0';
-              
-              int i;
-              for(i = 0; i < MD5_DIGEST_LENGTH; i++){
-                sprintf(buffer, "%02x", md5Sum[i]);
-                strncat(md5String, buffer, strlen(buffer));
+                // Marshal error parameters and send to client
+                sprintf(serverReply, "%d %d\n", ERR_RPC, TOO_MANY_ARGS);
+                SSL_write(ssl, serverReply, strlen(serverReply));                 
+              }else if(sscanf(buffer, "%s \"%[^\"] %s", command, commandArg, dummy) != 3){
+                printf("Too few arguments MD5\n");
+
+                // Marshal error parameters and send to client
+                sprintf(serverReply, "%d %d\n", ERR_RPC, TOO_FEW_ARGS);
+                SSL_write(ssl, serverReply, strlen(serverReply));                   
+              }else if(sscanf(buffer, "%s \"%[^\"] %s", command, commandArg, dummy) == 3 && strcmp(dummy, "\"") != 0){
+                printf("Bad double-quotes MD5\n", dummy);
+
+                // Marshal error parameters and send to client
+                sprintf(serverReply, "%d %d\n", ERR_RPC, MALFORMED_REQUEST);
+                SSL_write(ssl, serverReply, strlen(serverReply));                   
+              } else if(sscanf(buffer, "%s \"%[^\"] %s", command, commandArg, dummy) == 3){
+
+                unsigned char md5Sum[MD5_DIGEST_LENGTH];
+                char md5String[MD5_DIGEST_LENGTH + 1];  
+
+                int err = getMD5Sum(commandArg, md5Sum);
+
+                if(err != 0){
+                  sprintf(serverReply, "%d %d\n", SERVER_FAIL, errno);
+
+                  SSL_write(ssl, serverReply, strlen(serverReply));
+                } else{
+
+                  md5String[0] = '\0';
+                  
+
+                  int i;
+                  for(i = 0; i < MD5_DIGEST_LENGTH; i++){
+                    sprintf(buffer, "%02x", md5Sum[i]);
+                    strncat(md5String, buffer, strlen(buffer));
+                  }
+
+                  SSL_write(ssl, md5String, strlen(md5String));
+                  SSL_write(ssl, "\n", strlen("\n"));
+                }
+              }
+            // If the client requests a disconnect, properly cleanup, close, and return the forked process
+            }else if(strcmp(buffer, RPC_DISCONNECT) == 0 || buffer[0] == '\0'){
+
+              if(sscanf(buffer, "%s %s", command, dummy) == 2){
+                printf("Too many arguments\n");
+
+                // Marshal error parameters and send to client
+                sprintf(serverReply, "%d %d\n", ERR_RPC, TOO_MANY_ARGS);
+                SSL_write(ssl, serverReply, strlen(serverReply)); 
+
+              } else if(sscanf(buffer, "%s", command) == 1 || buffer[0] == '\0'){
+                // Terminate the SSL session, close the TCP connection, and clean up
+                printf("%d: Server: Terminating SSL session and TCP connection with client (%s)\n",
+                  getpid(), client_addr);
+                SSL_free(ssl);
+                close(client);
+
+                return EXIT_SUCCESS;
               }
 
-              SSL_write(ssl, md5String, strlen(md5String));
-              SSL_write(ssl, "\n", strlen("\n"));
-
-            // If the client requests a disconnect, properly cleanup, close, and return the forked process
-            }else if(strncmp(buffer, RPC_DISCONNECT, strlen(RPC_DISCONNECT)) == 0){
-
-              // Terminate the SSL session, close the TCP connection, and clean up
-              printf("%d: Server: Terminating SSL session and TCP connection with client (%s)\n",
-                getpid(), client_addr);
-              SSL_free(ssl);
-              close(client);
-
-              return EXIT_SUCCESS;
-
             // If the client requests if the connection is still alive, send back a pong
-            } else if(strncmp(buffer, RPC_REQUEST_ISALIVE, strlen(RPC_REQUEST_ISALIVE)) == 0){            
-              sprintf(serverReply, "%s\n", "pong");
-              SSL_write(ssl, serverReply, strlen(serverReply) + 1);
+            } else if(strncmp(buffer, RPC_REQUEST_ISALIVE, strlen(RPC_REQUEST_ISALIVE)) == 0){   
 
+              if(sscanf(buffer, "%s %s", command, dummy) == 2){
+                printf("Too many arguments\n");
+
+                // Marshal error parameters and send to client
+                sprintf(serverReply, "%d %d\n", ERR_RPC, TOO_MANY_ARGS);
+                SSL_write(ssl, serverReply, strlen(serverReply));    
+
+              } else if(sscanf(buffer, "%s", command) && strcmp(command, RPC_REQUEST_ISALIVE) != 0){
+                printf("Invalid command %s\n", command);
+
+                // Marshal error parameters and send to client
+                sprintf(serverReply, "%d %d\n", ERR_RPC, INVALID_COMMAND);
+                SSL_write(ssl, serverReply, strlen(serverReply));           
+
+              } else if(sscanf(buffer, "%s", command) == 1){
+                sprintf(serverReply, "%s\n", "pong");
+                SSL_write(ssl, serverReply, strlen(serverReply) + 1);
+              }
             // If the user requested the list of the directory
             }else if(strncmp(buffer, RPC_REQUEST_LISTING, strlen(RPC_REQUEST_LISTING)) == 0){
 
-              printf("%d: Sending list to client..\n", getpid());
-              DIR *directory;
+              if(sscanf(buffer, "%s %s", command, dummy) == 2){
+                printf("Too many arguments\n");
 
-              struct dirent *dir;
+                // Marshal error parameters and send to client
+                sprintf(serverReply, "%d %d\n", ERR_RPC, TOO_MANY_ARGS);
+                SSL_write(ssl, serverReply, strlen(serverReply));    
 
-              directory = opendir(DEFAULT_MEDIA_DIR);
+              } else if(sscanf(buffer, "%s", command) && strcmp(command, RPC_REQUEST_LISTING) != 0){
+                printf("Invalid command %s\n", command);
 
-              if(directory) {
-                while((dir = readdir(directory)) != NULL) {
-                  sprintf(serverReply, "%s\n", dir->d_name);
+                // Marshal error parameters and send to client
+                sprintf(serverReply, "%d %d\n", ERR_RPC, INVALID_COMMAND);
+                SSL_write(ssl, serverReply, strlen(serverReply));    
+              } else if(sscanf(buffer, "%s", command) == 1){
 
-                  if(strcmp(dir->d_name, ".") != 0 && strcmp(dir->d_name, "..") != 0){
-                    int tempWriteStream;
+                // Marshal error parameters and send to client
+                sprintf(serverReply, "%d %d\n", RPC_SUCCESS, RPC_SUCCESS);
+                SSL_write(ssl, serverReply, strlen(serverReply));    
+                
+                printf("%d: Sending list to client..\n", getpid());
+                DIR *directory;
 
-                    tempWriteStream = SSL_write(ssl, serverReply, strlen(serverReply) + 1);   
+                struct dirent *dir;
 
-                    // If there was a failure to write to the socket..
-                    if(tempWriteStream < 0){
-                      fprintf(stderr, "Server: Unable to process: %s\n", strerror(errno));
+                directory = opendir(DEFAULT_MEDIA_DIR);
 
-                      // Marshal error parameters and send to client: TODO THIS
-                      // sprintf(serverReply, "%d %d", SERVER_FAIL, errno);
-                      // SSL_write(ssl, serverReply, strlen(serverReply));  
+                if(directory) {
+                  while((dir = readdir(directory)) != NULL) {
+                    sprintf(serverReply, "%s\n", dir->d_name);
 
-                      close(tempWriteStream);
-                    }
-                  }                
-                }         
+                    if(strcmp(dir->d_name, ".") != 0 && strcmp(dir->d_name, "..") != 0)
+                      SSL_write(ssl, serverReply, strlen(serverReply) + 1);                  
+                  }         
 
-                sprintf(serverReply, "%d\n", RPC_SUCCESS);     
+                  sprintf(serverReply, "%d\n", RPC_SUCCESS);     
 
-                SSL_write(ssl, serverReply, strlen(serverReply) + 1);
-                closedir(directory);
+                  SSL_write(ssl, serverReply, strlen(serverReply) + 1);
+                  closedir(directory);
 
-                printf("Finished writing list to client...\n");
+                  printf("Finished writing list to client...\n");                
+                }else{
+                  printf("Directory does not exist (Somehow)\n");
+                }
               }
             } else if(strncmp(buffer, RPC_REQUEST_FILE, strlen(RPC_REQUEST_FILE)) == 0){
 
@@ -721,87 +788,99 @@ int main(int argc, char **argv) {
               // So we're saying, keep reading until you reach a double-quote!
               sscanf(buffer, "%s \"%[^\"]", command, commandArg);
 
-              printf("%d: Attempting to send file \"%s\" to client.\n", getpid(), commandArg);
+              printf("Getting md5 of %s\n", commandArg);
 
-              char fullFilePath[BUFFER_SIZE + sizeof(commandArg) + strlen(DEFAULT_MEDIA_DIR) + 4];
+              if(sscanf(buffer, "%s \"%[^\"] %s %s", command, commandArg, dummy, dummy2) == 4){
+                printf("Too many arguments for requestfile\n");
+                printf("Dummy is %s\n", dummy);
 
-              sprintf(fullFilePath, "./%s/%s", DEFAULT_MEDIA_DIR, commandArg);            
+                // Marshal error parameters and send to client
+                sprintf(serverReply, "%d %d\n", ERR_RPC, TOO_MANY_ARGS);
+                SSL_write(ssl, serverReply, strlen(serverReply));                 
+              }else if(sscanf(buffer, "%s \"%[^\"] %s", command, commandArg, dummy) != 3){
+                printf("Too few arguments\n");
 
-              int fileToRead, readStream, writeStream;
+                // Marshal error parameters and send to client
+                sprintf(serverReply, "%d %d\n", ERR_RPC, TOO_FEW_ARGS);
+                SSL_write(ssl, serverReply, strlen(serverReply));                   
+              }else if(sscanf(buffer, "%s \"%[^\"] %s", command, commandArg, dummy) == 3 && strcmp(dummy, "\"") != 0){
+                printf("Bad double-quotes\n", dummy);
 
-              fileToRead = open(fullFilePath, O_RDONLY, 644);
+                // Marshal error parameters and send to client
+                sprintf(serverReply, "%d %d\n", ERR_RPC, MALFORMED_REQUEST);
+                SSL_write(ssl, serverReply, strlen(serverReply));                   
+              } else if(sscanf(buffer, "%s \"%[^\"] %s", command, commandArg, dummy) == 3){
+                printf("%d: Attempting to send file \"%s\" to client.\n", getpid(), commandArg);
 
-              if(fileToRead < 0)
-                fprintf(stderr, "Server: Unable to process %s: %s\n", commandArg, strerror(errno));
+                char fullFilePath[BUFFER_SIZE + sizeof(commandArg) + strlen(DEFAULT_MEDIA_DIR) + 4];
 
-              // Send a response to the client that the file sent is
-              // valid and that we can start writing immediately
-              sprintf(serverReply, "%d %d", RPC_SUCCESS, START_WRITING);              
-              // sprintf(commandArg, "%s\n", commandArg);
+                sprintf(fullFilePath, "./%s/%s", DEFAULT_MEDIA_DIR, commandArg);            
 
-              struct stat fileStats;
-              off_t fileSize;
-              stat(fullFilePath, &fileStats);
+                int fileToRead, readStream, writeStream;
 
+                fileToRead = open(fullFilePath, O_RDONLY, 644);
 
-        		  //DP: sending file size first, recieved with buffered reader
-              fileSize = fileStats.st_size;
-              printf("File Size = %ld\n", fileSize);
-              char size[BUFFER_SIZE];
-              sprintf(size, "%ld\n", fileSize);
-
-              SSL_write(ssl,size, BUFFER_SIZE);
-    				  //DP: End of what I did here
-
-              char fileBuffer[BUFFER_SIZE];
-
-              int total = 0;
-
-
-              // If writing to the socket fails at any point,
-              // we terminate the read and notify the client
-              // by setting writeChunkSuccess to 1
-              int writeChunkSuccess = 0;
-
-              // While we still have chunks to read...
-              do{
-                readStream = read(fileToRead, fileBuffer, BUFFER_SIZE);
-                total += readStream;
-
-                // Write the contents of buffer from the readstream to the client socket
-                writeStream = SSL_write(ssl, fileBuffer, readStream);
-
-                // If there was a failure to write to the socket..
-                if(writeStream < 0){
-
-                  // Notify client and end read/write loop by setting
-                  // writeChunkSuccess to 1
+                if(fileToRead < 0){
                   fprintf(stderr, "Server: Unable to process %s: %s\n", commandArg, strerror(errno));
 
                   // Marshal error parameters and send to client
-                  sprintf(serverReply, "%d %d", SERVER_FAIL, errno);
-                  SSL_write(ssl, serverReply, strlen(serverReply));  
+                  sprintf(serverReply, "%d %d\n", SERVER_FAIL, errno);
+                  SSL_write(ssl, serverReply, strlen(serverReply));                     
+                }
 
-                  close(readStream);
-                  close(writeStream);
-                  close(fileToRead);
+                // Send a response to the client that the file sent is
+                // valid and that we can start writing immediately
+                sprintf(serverReply, "%d %d\n", RPC_SUCCESS, START_WRITING);              
+                // sprintf(commandArg, "%s\n", commandArg);
 
-                  writeChunkSuccess = 1;
-                  return -1;
-                }                
+                struct stat fileStats;
+                off_t fileSize;
+                stat(fullFilePath, &fileStats);
 
-              }while(readStream > 0);
 
-              close(readStream);
-              close(writeStream);
-              close(fileToRead);
+          		  //DP: sending file size first, recieved with buffered reader
+                fileSize = fileStats.st_size;
+                printf("File Size = %ld\n", fileSize);
+                char size[BUFFER_SIZE];
+                sprintf(size, "%ld\n", fileSize);
 
-              printf("%d: Finished writing \"%s\" to client.\n", getpid(), commandArg);
-              SSL_write(ssl, "\n", strlen("\n"));
+                SSL_write(ssl,size, BUFFER_SIZE);
+      				  //DP: End of what I did here
+
+                char fileBuffer[BUFFER_SIZE];
+
+                int total = 0;
+
+                // While we still have chunks to read...
+                do{
+                  readStream = read(fileToRead, fileBuffer, BUFFER_SIZE);
+
+                  total += readStream;
+
+                  // Write the contents of buffer from the readstream to the client socket
+                  writeStream = SSL_write(ssl, fileBuffer, readStream);
+ 
+                }while(readStream > 0);
+
+                close(readStream);
+                close(writeStream);
+                close(fileToRead);
+
+                printf("%d: Finished writing \"%s\" to client.\n", getpid(), commandArg);
+                SSL_write(ssl, "\n", strlen("\n"));
+            }
 
             } else {
-              printf("Invalid command issued %s\n", buffer);
+              // Load the command so we can print an error
+              sscanf(buffer, "%s", command);
+              printf("%d: Invalid command issued '%s'\n", getpid(), command);
+
+              // Marshal error parameters and send to client
+              sprintf(serverReply, "%d %d\n", ERR_RPC, INVALID_COMMAND);
+              SSL_write(ssl, serverReply, strlen(serverReply));    
             }
+
+            bzero(buffer, BUFFER_SIZE);
           }
         }
       }
