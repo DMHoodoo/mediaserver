@@ -1,5 +1,5 @@
 CC := gcc
-LDFLAGS := -lssl -lcrypto -lsqlite3
+LDFLAGS := -lssl -lcrypto
 UNAME := $(shell uname)
 
 ifeq ($(UNAME), Darwin)
