@@ -2,7 +2,6 @@
 
 PROGRAM:  homeserver.c
 AUTHOR:   Hassan Khan & Dacia Pennington
-COURSE:   CS469 - Distributed Systems (Regis University)
 SYNOPSIS: Home media-server that forks a primary/backup process. Distributes
           media, verifies listings, and handles incoming client connections.
           Requires openssl
